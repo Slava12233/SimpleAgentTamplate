@@ -11,6 +11,7 @@ A production-ready conversational AI agent with memory, structured outputs, and 
 5. [Components](#components)
    - [Agent Module](#agent-module)
    - [Database Integration](#database-integration)
+   - [Memory System](#memory-system)
    - [Extraction Utilities](#extraction-utilities)
    - [Authentication](#authentication)
    - [API Endpoints](#api-endpoints)
@@ -31,7 +32,7 @@ This project provides a robust framework for building AI-powered conversational 
 ## Features
 
 - 💬 **Conversational Memory**: Maintains context across multiple conversation turns
-- 🧠 **Multi-Topic Support**: Can discuss and remember multiple topics in a single conversation
+- 🧠 **Multi-Level Memory System**: Hierarchical memory with short-term, working, and long-term components
 - 🔢 **Structured Outputs**: Uses Pydantic models for type-safe structured responses
 - 📊 **Database Integration**: Stores conversation history in Supabase
 - 🔒 **API Authentication**: Secures endpoints with API token verification
@@ -45,20 +46,23 @@ The system follows a layered architecture:
 
 1. **API Layer**: FastAPI application that exposes endpoints and handles HTTP requests
 2. **Agent Layer**: Core logic for processing user queries using Pydantic AI
-3. **Database Layer**: Supabase integration for storing and retrieving conversation history
-4. **Utilities Layer**: Helper functions for extraction and formatting
+3. **Memory Layer**: Hierarchical memory system for context management
+4. **Database Layer**: Supabase integration for storing and retrieving conversation history
+5. **Utilities Layer**: Helper functions for extraction and formatting
 
 The conversation flow works as follows:
 
 1. User sends a query to the `/api/agent` endpoint
 2. The system retrieves previous conversation history for the session
-3. The prompt is constructed with history + new query
-4. The LLM generates a structured response
-5. Response is extracted and stored in the database
-6. Response is sent back to the user
+3. The memory system combines short-term, working, and long-term memories 
+4. The prompt is constructed with history + new query
+5. The LLM generates a structured response
+6. Response is extracted and stored in the database and memory system
+7. Response is sent back to the user
 
 For detailed documentation on specific components, see:
 - [Conversation Memory System](docs/CONVERSATION_MEMORY.md)
+- [Enhanced Memory Architecture](docs/ENHANCED_MEMORY.md)
 - [Response Extraction System](docs/EXTRACTION.md)
 - [Testing Framework](docs/TESTING.md)
 - [Command Line Interface](docs/CLI.md)
@@ -125,6 +129,7 @@ python src/main.py
 The agent will be available at:
 - API Endpoint: http://localhost:8001/api/agent
 - API Documentation: http://localhost:8001/docs
+- Memory Statistics: http://localhost:8001/memory-stats
 
 ### Using the CLI
 
@@ -139,11 +144,18 @@ python cli.py --query "What's the weather like in New York?"
 
 # Continue a previous session
 python cli.py --session "your-session-id"
+
+# Show memory statistics
+python cli.py --session "your-session-id" --memory
+
+# Clear session memory
+python cli.py --session "your-session-id" --clear
 ```
 
 The CLI provides:
 - Interactive chat with the agent
 - Conversation memory across messages
+- Memory inspection and management
 - Markdown formatting for responses
 - Command history
 
@@ -188,6 +200,43 @@ Authentication utilities:
 
 - `verify_token()`: Verifies the API bearer token against environment variable
 
+### Memory System
+
+The memory system (`src/memory/`) implements a hierarchical approach to memory management:
+
+#### manager.py
+
+The main memory manager that coordinates between memory components:
+
+- `store_message()`: Stores messages in memory
+- `get_conversation_history()`: Retrieves messages from memory
+- `get_formatted_history()`: Formats memory for prompt construction
+
+#### models.py
+
+Pydantic models for memory objects:
+
+- `MemoryItem`: Base model for all memory items
+- `MessageMemoryItem`: Model for conversation messages
+- `SummaryMemoryItem`: Model for conversation summaries
+- `FactMemoryItem`: Model for extracted facts
+
+#### short_term.py
+
+Short-term memory implementation:
+
+- Uses a FIFO queue for recent messages
+- Provides persistence between restarts
+- Optimized for quick access to recent context
+
+#### config.py
+
+Configuration for the memory system:
+
+- Memory size limits and thresholds
+- Persistence settings
+- Integration points with environment variables
+
 ### Extraction Utilities
 
 The `src/utils/extraction.py` file contains utilities for parsing LLM responses:
@@ -211,6 +260,8 @@ The system uses Supabase as its database with a `messages` table structure:
 
 - `POST /api/agent`: Main endpoint for processing agent requests
 - `POST /api/test-extraction`: Test endpoint for extraction utilities
+- `GET /memory-stats`: Get statistics about stored memories
+- `POST /memory/clear/{session_id}`: Clear memory for a specific session
 - `GET /`: Root endpoint with API information
 
 ## Testing
@@ -222,6 +273,8 @@ The project includes comprehensive test coverage:
 Located in `tests/unit/`, these test individual components:
 
 - `test_extraction.py`: Tests the extraction utility with various input formats
+- `test_short_term_memory.py`: Tests the short-term memory component
+- `test_memory_manager.py`: Tests the memory manager functionality
 
 ### Integration Tests
 
@@ -322,6 +375,22 @@ Test the extraction functionality.
 }
 ```
 
+### GET /memory-stats
+
+Get memory statistics.
+
+**Query Parameters:**
+- `session_id` (optional): Filter by session ID
+
+**Response:**
+```json
+{
+  "total_messages": 15,
+  "session_count": 3,
+  "sessions": ["session-1", "session-2", "session-3"]
+}
+```
+
 ## Environment Variables
 
 Required environment variables are documented in `.env.example`:
@@ -331,6 +400,9 @@ Required environment variables are documented in `.env.example`:
 - `API_BEARER_TOKEN`: The token for API authorization
 - `OPENAI_API_KEY`: Your OpenAI API key
 - `PYDANTIC_AI_MODEL`: The model to use (default: 'openai:gpt-4o')
+- `MEMORY_PERSISTENCE_DIR`: Directory to store memory persistence files
+- `MEMORY_SHORT_TERM_SIZE`: Maximum number of items in short-term memory
+- `MEMORY_PERSISTENCE_ENABLED`: Enable/disable memory persistence
 
 ## Contributing
 

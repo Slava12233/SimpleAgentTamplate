@@ -18,6 +18,7 @@ from src.agent.models import (
 from src.agent.auth import verify_token, security
 from src.agent.db import fetch_conversation_history, store_message, format_conversation_history
 from src.utils.extraction import extract_result_from_str
+from src.memory.manager import MemoryManager
 
 # Load environment variables using dotenv
 from dotenv import load_dotenv
@@ -46,6 +47,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Initialize the memory manager
+memory_dir = os.path.join(os.path.dirname(__file__), '../../memory_data')
+memory_manager = MemoryManager(
+    short_term_size=10,
+    persistence_dir=memory_dir
 )
 
 # Initialize the Pydantic AI agent
@@ -160,10 +168,22 @@ async def process_agent_request(
         # Fetch conversation history from the DB
         conversation_history = await fetch_conversation_history(supabase, request.session_id)
         
-        # Format conversation history for the agent
-        formatted_history = await format_conversation_history(conversation_history)
+        # Store in memory system (in addition to DB)
+        memory_manager.store_message(
+            session_id=request.session_id,
+            user_id=request.user_id,
+            content=request.query,
+            role="human"
+        )
         
-        # Store user's query
+        # Get conversation history from memory
+        formatted_history = memory_manager.get_formatted_history(session_id=request.session_id)
+        
+        # Fallback to DB-based history if memory is empty
+        if not formatted_history.strip():
+            formatted_history = await format_conversation_history(conversation_history)
+        
+        # Store user's query in DB
         await store_message(
             supabase,
             session_id=request.session_id,
@@ -212,7 +232,20 @@ async def process_agent_request(
             confidence = 0.5
             sentiment = "neutral"
 
-        # Store agent's response with additional structured data
+        # Store agent's response in memory
+        memory_manager.store_message(
+            session_id=request.session_id,
+            user_id=request.user_id,
+            content=agent_response,
+            role="ai",
+            metadata={
+                "request_id": request.request_id,
+                "confidence": confidence,
+                "sentiment": sentiment
+            }
+        )
+
+        # Store agent's response in DB with additional structured data
         await store_message(
             supabase,
             session_id=request.session_id,
@@ -266,6 +299,47 @@ async def test_extraction(request: ExtractionTestRequest):
             raw_output=str(e)
         )
 
+@app.get("/memory-stats", tags=["Memory"], response_model=dict)
+async def memory_stats(session_id: str = None):
+    """Get memory statistics.
+    
+    Args:
+        session_id (str, optional): Filter by session ID.
+        
+    Returns:
+        dict: Memory statistics.
+    """
+    if session_id:
+        messages = memory_manager.get_conversation_history(session_id=session_id)
+        return {
+            "session_id": session_id,
+            "message_count": len(messages),
+            "human_messages": sum(1 for m in messages if m.role == "human"),
+            "ai_messages": sum(1 for m in messages if m.role == "ai")
+        }
+    else:
+        # Get all unique session IDs
+        all_items = memory_manager.short_term.get_all()
+        session_ids = set(item.session_id for item in all_items)
+        return {
+            "total_messages": len(all_items),
+            "session_count": len(session_ids),
+            "sessions": list(session_ids)
+        }
+
+@app.post("/memory/clear/{session_id}", tags=["Memory"])
+async def clear_memory(session_id: str):
+    """Clear memory for a specific session.
+    
+    Args:
+        session_id (str): The session ID to clear.
+        
+    Returns:
+        dict: Success status.
+    """
+    memory_manager.clear_session(session_id=session_id)
+    return {"success": True, "message": f"Memory cleared for session {session_id}"}
+
 @app.get("/", tags=["Info"])
 async def root():
     """Root endpoint with API information.
@@ -278,6 +352,8 @@ async def root():
         "endpoints": [
             "/api/agent",
             "/api/test-extraction",
+            "/memory-stats",
+            "/memory/clear/{session_id}",
             "/docs"
         ],
         "documentation": "Visit /docs for interactive API documentation"

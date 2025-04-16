@@ -44,4 +44,7 @@ examples/
 htmlcov/
 
 # Supabase
-.supabase/ 
+.supabase/
+
+# Memory data
+memory_data/ 
